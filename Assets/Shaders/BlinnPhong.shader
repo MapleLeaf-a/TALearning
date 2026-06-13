@@ -27,21 +27,25 @@ Shader "Unlit/BlinnPhong"
             #include "UnityCG.cginc"
             #include "Lighting.cginc"
             
-            
+            #pragma multi_compile_fwdbase
+            #include "AutoLight.cginc"
 
             struct appdata
             {
-                float4 vertex : POSITION;
+                float4 pos : POSITION;
                 float2 uv : TEXCOORD0;
                 float3 normal : NORMAL;
             };
 
             struct v2f
             {
-                float4 vertex : SV_POSITION;
+                float4 pos : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 float3 normal_world : TEXCOORD1;
                 float4 pos_world : TEXCOORD2;
+
+                // 声明阴影坐标
+                SHADOW_COORDS(3)
             };
             
             sampler2D _MainTex;
@@ -55,10 +59,14 @@ Shader "Unlit/BlinnPhong"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.pos = UnityObjectToClipPos(v.pos);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
                 o.normal_world = normalize(mul(v.normal, unity_WorldToObject));
-                o.pos_world = mul(unity_ObjectToWorld, v.vertex); //得到顶点的世界坐标
+                o.pos_world = mul(unity_ObjectToWorld, v.pos); //得到顶点的世界坐标
+
+                // 传递阴影坐标
+                TRANSFER_SHADOW(o);
+
                 return o;
             }
 
@@ -71,24 +79,41 @@ Shader "Unlit/BlinnPhong"
 
                 float3 normal_world = normalize(i.normal_world);
 
-                float3 l = normalize(light_pos - i.pos_world).xyz; //指向光源的单位向量
+                float3 light_dir; //指向光源的单位向量
+                float attenuation; //衰减
 
-                float r = distance(i.pos_world, light_pos);
-                float r_square = r * r;
+                if (light_pos.w == 0)
+                {
+                    //平行光：位置就是方向
+                    light_dir = normalize(light_pos.xyz);
+                    attenuation = 1.0;
+                }
+                else
+                {
+                    //点光源
+                    float3 offset = light_pos.xyz - i.pos_world.xyz;
+                    float r = length(offset);
+                    light_dir = offset / r;
+                    attenuation = 1.0 / (r * r);
+                }
 
                 //漫反射光
-                fixed3 Ld = _Kd * col * (I / r_square) * max(0, dot(normal_world, l));
+                fixed3 Ld = _Kd * col * (I * attenuation) * max(0, dot(normal_world, light_dir));
 
                 float3 view_world = normalize(_WorldSpaceCameraPos - i.pos_world.xyz);
-                float3 h = normalize(view_world + l);//半程向量
+                float3 h = normalize(view_world + light_dir);//半程向量
 
                 //镜面反射光
-                fixed3 Ls = _Ks * (I / r_square) * pow(max(0, dot(normal_world, h)), _KsPow);
+                fixed3 Ls = _Ks * (I * attenuation) * pow(max(0, dot(normal_world, h)), _KsPow);
 
                 //环境光
                 float3 La = UNITY_LIGHTMODEL_AMBIENT.rgb * col;
 
-                return fixed4(La + Ls + Ld, 1.0);
+                // 获取阴影值（1 = 无阴影，0 = 全阴影）
+                half shadow = SHADOW_ATTENUATION(i);
+
+                //阴影只影响漫反射和镜面反射，不影响环境光
+                return fixed4(La + (Ls + Ld) * shadow, 1.0);
             }
 
             ENDCG
@@ -106,19 +131,25 @@ Shader "Unlit/BlinnPhong"
             #include "UnityCG.cginc"
             #include "Lighting.cginc"
             
+            #pragma multi_compile_fwdbase
+            #include "AutoLight.cginc"
+
             struct appdata
             {
-                float4 vertex : POSITION;
+                float4 pos : POSITION;
                 float2 uv : TEXCOORD0;
                 float3 normal : NORMAL;
             };
 
             struct v2f
             {
-                float4 vertex : SV_POSITION;
+                float4 pos : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 float3 normal_world : TEXCOORD1;
                 float4 pos_world : TEXCOORD2;
+
+                // 声明阴影坐标
+                SHADOW_COORDS(3)
             };
             
             sampler2D _MainTex;
@@ -132,10 +163,14 @@ Shader "Unlit/BlinnPhong"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.pos = UnityObjectToClipPos(v.pos);
                 o.uv = TRANSFORM_TEX(v.uv, _MainTex);
                 o.normal_world = normalize(mul(v.normal, unity_WorldToObject));
-                o.pos_world = mul(unity_ObjectToWorld, v.vertex); //得到顶点的世界坐标
+                o.pos_world = mul(unity_ObjectToWorld, v.pos); //得到顶点的世界坐标
+
+                // 传递阴影坐标
+                TRANSFER_SHADOW(o);
+
                 return o;
             }
 
@@ -148,21 +183,38 @@ Shader "Unlit/BlinnPhong"
 
                 float3 normal_world = normalize(i.normal_world);
 
-                float3 l = normalize(light_pos - i.pos_world).xyz; //指向光源的单位向量
+                float3 light_dir; //指向光源的单位向量
+                float attenuation; //衰减
 
-                float r = distance(i.pos_world, light_pos);
-                float r_square = r * r;
+                if (light_pos.w == 0)
+                {
+                    //平行光：位置就是方向
+                    light_dir = normalize(light_pos.xyz);
+                    attenuation = 1.0;
+                }
+                else
+                {
+                    //点光源
+                    float3 offset = light_pos.xyz - i.pos_world.xyz;
+                    float r = length(offset);
+                    light_dir = offset / r;
+                    attenuation = 1.0 / (r * r);
+                }
 
                 //漫反射光
-                fixed3 Ld = _Kd * col * (I / r_square) * max(0, dot(normal_world, l));
+                fixed3 Ld = _Kd * col * (I * attenuation) * max(0, dot(normal_world, light_dir));
 
                 float3 view_world = normalize(_WorldSpaceCameraPos - i.pos_world.xyz);
-                float3 h = normalize(view_world + l);//半程向量
+                float3 h = normalize(view_world + light_dir);//半程向量
 
                 //镜面反射光
-                fixed3 Ls = _Ks * (I / r_square) * pow(max(0, dot(normal_world, h)), _KsPow);
+                fixed3 Ls = _Ks * (I * attenuation) * pow(max(0, dot(normal_world, h)), _KsPow);
 
-                return fixed4(Ls + Ld, 1.0);
+                // 获取阴影值（1 = 无阴影，0 = 全阴影）
+                half shadow = SHADOW_ATTENUATION(i);
+
+                //阴影只影响漫反射和镜面反射，不影响环境光
+                return fixed4((Ls + Ld) * shadow, 1.0);
             }
 
             ENDCG
