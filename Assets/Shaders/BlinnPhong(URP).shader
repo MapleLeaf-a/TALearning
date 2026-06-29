@@ -29,9 +29,16 @@ Shader "Unlit/BlinnPhong(URP)"
             #pragma multi_compile_fragment _SCREEN_SPACE_OCCLUSION //屏幕空间遮挡
             #pragma multi_compile_fragment _SHADOWS_SOFT //软阴影
 
+            // 处理附加光源的阴影
+            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+            // 处理附加光源的顶点光照（性能优化）
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX
+
+
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl" //核心库
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl" //光照库
-        
+
+
             CBUFFER_START(UnityPerMaterial) //材质常量缓冲区
                 sampler2D _BaseMap;
                 int _HalflambertPow;
@@ -92,6 +99,27 @@ Shader "Unlit/BlinnPhong(URP)"
                     return output; //返回屏幕空间位置
                 }
 
+                //计算光照Ld、Ls
+                half3 CalculateLight(Light light, Varings input, half3 col)
+                {
+                    //光源方向
+                    half3 l = light.direction;
+                    //法线
+                    half3 n = normalize(input.normalWS);
+                    
+                    half3 Ld = _Kd * col * light.distanceAttenuation * max(0, dot(n, l));
+
+                    //观察方向
+                    half3 v = normalize(GetCameraPositionWS() - input.positionWS);
+
+                    //半程向量
+                    half3 h = normalize(v + l);
+                
+                    half3 Ls = _Ks * col * light.distanceAttenuation * pow(max(0, dot(n, h)), _KsPow);
+
+                    return Ld + Ls;
+                }
+
                 //返回rgba
                 half4 MapleFragmentShader(Varings input) : SV_TARGET
                 {
@@ -99,46 +127,29 @@ Shader "Unlit/BlinnPhong(URP)"
 
                     half3 col = tex2D(_BaseMap, input.uv0).xyz; //采样纹理贴图
 
-                    half3 I = light.color;
-                    half3 light_pos = light.direction;
-
-                    float3 normal_world = normalize(input.normalWS);
-
-                    float3 light_dir; //指向光源的单位向量
-                    float attenuation; //衰减
-
-                    light_dir = normalize(light.direction);
-                    attenuation = 1.0;
-
-                    // if (light_pos.w == 0)
-                    // {
-                    //     //平行光：位置就是方向
-                    //     light_dir = normalize(light_pos.xyz);
-                    //     attenuation = 1.0;
-                    // }
-                    // else
-                    // {
-                    //     //点光源
-                    //     float3 offset = light_pos.xyz - i.pos_world.xyz;
-                    //     float r = length(offset);
-                    //     light_dir = offset / r;
-                    //     attenuation = 1.0 / (r * r);
-                    // }
-
-                    //漫反射光
-                    half3 Ld = _Kd * col * (I * attenuation) * max(0, dot(normal_world, light_dir));
-
-                    float3 view_world = normalize(_WorldSpaceCameraPos - input.positionWS.xyz);
-                    float3 h = normalize(view_world + light_dir);//半程向量
-
-                    //镜面反射光
-                    half3 Ls = _Ks * (I * attenuation) * pow(max(0, dot(normal_world, h)), _KsPow);
+                    half3 LsPlusLd = CalculateLight(light, input, col);
 
                     //环境光
-                    float3 La = UNITY_LIGHTMODEL_AMBIENT.rgb * col;
+                    half3 La = UNITY_LIGHTMODEL_AMBIENT.rgb * col * _Ka;
+
+                    half3 finalCol = LsPlusLd + La;
+
+                    //计算点光源
+                    uint additionalLightsCount = GetAdditionalLightsCount();
+                    for (uint lightIndex = 0u; lightIndex < additionalLightsCount; lightIndex++)
+                    {
+                        Light addLight = GetAdditionalLight(lightIndex, input.positionWS);
+                        
+                        //计算这个光源的贡献
+                        half3 addLightColor = CalculateLight(addLight, input, col);
+                        
+                        //将附加光源的贡献累加
+                        finalCol += addLightColor * addLight.shadowAttenuation;
+                    }
+
 
                     //阴影只影响漫反射和镜面反射，不影响环境光
-                    return half4(La + (Ls + Ld), 1.0);
+                    return half4(finalCol, 1.0);
                 }
 
             ENDHLSL
