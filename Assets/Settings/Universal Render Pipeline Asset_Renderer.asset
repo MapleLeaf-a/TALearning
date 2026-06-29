@@ -58,3 +58,22 @@ MonoBehaviour:
   m_CopyDepthMode: 1
   m_AccurateGbufferNormals: 0
   m_IntermediateTextureMode: 1
+--- !u!114 &3515220254720991155
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a28cc7c3956d184e82308f39883c087, type: 3}
+  m_Name: PCSSRenderPassFeature
+  m_EditorClassIdentifier: 
+  m_Active: 0
+  lightSize: 0.05
+  blockerSearchRange: 20
+  blockerSearchSamples: 7
+  pcfFilterSamples: 7
+  debugMode: 0
+  blitToScreen: 0

@@ -1,157 +1,311 @@
 Shader "Unlit/BlinnPhong(URP)"
 {
-    Properties //开放给外界的属性
+    Properties
     {
-        [Header(Textures)] //属性分组：纹理
-        _BaseMap("Base Map", 2D) = "white" {} //主纹理贴图
+        [Header(Textures)]
+        _BaseMap("Base Map", 2D) = "white" {}
 
         _Kd("漫反射系数", Color) = (1,1,1)
         _Ks("镜面反射系数", Color) = (1,1,1)
         _Ka("环境光系数", Color) = (1,1,1)
         _KsPow("镜面反射cos幂次", Float) = 200
+
+        [Header(PCSS Shadows)]
+        [Space]
+        [Toggle(_PCSS_ON)] _PCSS("启用 PCSS 软阴影", Float) = 0
+        _LightSize("光源大小", Range(0.0, 0.5)) = 0.05
+        _BlockerSearchRange("遮挡搜索范围(纹素)", Range(0, 50)) = 20
+        _BlockerSamples("遮挡搜索采样数(每边)", Range(1, 10)) = 5
+        _PCFSamples("PCF滤波采样数(每边)", Range(1, 10)) = 5
     }
-    SubShader //子着色器
+    SubShader
     {
         Tags
         {
-            "RenderPipeline" = "UniveralPipeline" //指定渲染管线
-            "RenderType" = "Opaque" //指定渲染类型：不透明
+            "RenderPipeline" = "UniveralPipeline"
+            "RenderType" = "Opaque"
         }
 
-        HLSLINCLUDE //公共代码块开始
-            //预处理指令、头文件、常量定义、函数定义
-            #pragma multi_compile _MAIN_LIGHT_SHADOWS //主光源阴影
-            #pragma multi_compile _MAIN_LIGHT_SHADOWS_CASCADE //主光源级联阴影
-            #pragma multi_compile _MAIN_LIGHT_SHADOWS_SCREEN //主光源屏幕空间阴影
+        HLSLINCLUDE
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
 
-            #pragma multi_compile_fragment _LIGHT_LAYERS //光照层
-            #pragma multi_compile_fragment _LIGHT_COOKIES //光照饼干
-            #pragma multi_compile_fragment _SCREEN_SPACE_OCCLUSION //屏幕空间遮挡
-            #pragma multi_compile_fragment _SHADOWS_SOFT //软阴影
+            #pragma multi_compile_fragment _LIGHT_LAYERS
+            #pragma multi_compile_fragment _LIGHT_COOKIES
+            #pragma multi_compile_fragment _SCREEN_SPACE_OCCLUSION
+            #pragma multi_compile_fragment _SHADOWS_SOFT
 
-            // 处理附加光源的阴影
-            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
-            // 处理附加光源的顶点光照（性能优化）
-            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
 
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl" //核心库
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl" //光照库
-
-
-            CBUFFER_START(UnityPerMaterial) //材质常量缓冲区
+            CBUFFER_START(UnityPerMaterial)
                 sampler2D _BaseMap;
-                int _HalflambertPow;
                 float3 _Kd;
                 float3 _Ka;
                 float3 _Ks;
                 float _KsPow;
+
+                float _LightSize;
+                float _BlockerSearchRange;
+                int _BlockerSamples;
+                int _PCFSamples;
             CBUFFER_END
-        
+
         ENDHLSL
 
 
-        Pass //渲染通道
+        Pass
         {
-            Name "Maple_UniversalForward" //通道名称
-            Tags //标签
+            Name "Maple_UniversalForward"
+            Tags
             {
-                "LightMode" = "UniversalForward" //光照模型：前向渲染
+                "LightMode" = "UniversalForward"
             }
 
             HLSLPROGRAM
-                #pragma vertex MapleVertexShader //声明顶点着色器入口
-                #pragma fragment MapleFragmentShader //声明片段着色器入口    
-            
-                //顶点shader输入参数
+                #pragma vertex MapleVertexShader
+                #pragma fragment MapleFragmentShader
+                #pragma shader_feature_local _PCSS_ON
+
                 struct Attributes
                 {
-                    float4 positionOS : POSITION; //positionObejctSpace模型空间顶点坐标
-                    float2 uv0 : TEXCOORD0; //第一套纹理坐标
-                    float3 normalOS : NORMAL; //本地坐标法线
+                    float4 positionOS : POSITION;
+                    float2 uv0 : TEXCOORD0;
+                    float3 normalOS : NORMAL;
                 };
 
-                //由顶点着色器返回，传递给片元着色器的输入参数
                 struct Varings
                 {
-                    float4 positionCS : SV_POSITION; //裁剪空间顶点坐标
-                    float2 uv0 : TEXCOORD0; //第一套纹理坐标
-                    float3 normalWS : TEXCOORD1; //世界空间法线
+                    float4 positionCS : SV_POSITION;
+                    float2 uv0 : TEXCOORD0;
+                    float3 normalWS : TEXCOORD1;
                     float3 positionWS : TEXCOORD2;
                 };
 
-                Varings MapleVertexShader(Attributes input) 
+                Varings MapleVertexShader(Attributes input)
                 {
                     Varings output;
-                    
-                    //顶点相关
-                    VertexPositionInputs vertexInput = GetVertexPositionInputs(input.positionOS.xyz); //转换顶点空间
-                    output.positionCS = vertexInput.positionCS; //拿到裁剪空间的坐标
-                    output.positionWS = vertexInput.positionWS;
-                    
-                    //法线相关
-                    VertexNormalInputs vertexNormalInput = GetVertexNormalInputs(input.normalOS); //转换法线坐标
-                    output.normalWS = vertexNormalInput.normalWS; //拿到世界空间的法线坐标
 
-                    //uv相关
+                    VertexPositionInputs vertexInput = GetVertexPositionInputs(input.positionOS.xyz);
+                    output.positionCS = vertexInput.positionCS;
+                    output.positionWS = vertexInput.positionWS;
+
+                    VertexNormalInputs vertexNormalInput = GetVertexNormalInputs(input.normalOS);
+                    output.normalWS = vertexNormalInput.normalWS;
+
                     output.uv0 = input.uv0;
 
-                    return output; //返回屏幕空间位置
+                    return output;
                 }
 
-                //计算光照Ld、Ls
-                half3 CalculateLight(Light light, Varings input, half3 col)
+                // ============================================================
+                // PCSS — GAMES202 三步算法
+                // ============================================================
+
+                // 读取阴影贴图原始深度（使用内置 sampler_PointClamp，无需声明）
+                float SampleShadowMapRawDepth(float2 uv)
                 {
-                    //光源方向
+                    return SAMPLE_TEXTURE2D_LOD(_MainLightShadowmapTexture, sampler_PointClamp, uv, 0).r;
+                }
+
+                // Step 1: Blocker Search
+                float FindBlockerDepth(float2 shadowUV, float d_receiver)
+                {
+                    float2 texelSize = _MainLightShadowmapSize.xy;
+                    float searchRadius = _BlockerSearchRange * texelSize.x;
+
+                    float avgBlockerDepth = 0;
+                    float blockerCount = 0;
+
+                    int halfSamples = (_BlockerSamples - 1) / 2;
+                    for (int x = -halfSamples; x <= halfSamples; x++)
+                    {
+                        for (int y = -halfSamples; y <= halfSamples; y++)
+                        {
+                            float2 offset = float2(x, y) * searchRadius;
+                            float sampleDepth = SampleShadowMapRawDepth(shadowUV + offset);
+
+                            if (sampleDepth < d_receiver - 0.001)
+                            {
+                                avgBlockerDepth += sampleDepth;
+                                blockerCount += 1.0;
+                            }
+                        }
+                    }
+
+                    if (blockerCount > 0.0)
+                        return avgBlockerDepth / blockerCount;
+                    else
+                        return 1.0;
+                }
+
+                // Step 2: Penumbra Estimation
+                // 返回值为阴影贴图纹素数（texels）
+                float EstimatePenumbraWidth(float d_receiver, float d_blocker)
+                {
+                    float ratio = (d_receiver - d_blocker) / max(d_blocker, 0.001);
+                    // _LightSize: 光源在阴影贴图中占的纹素比例（0.05 = 5%的阴影贴图宽度）
+                    return ratio * _LightSize * _MainLightShadowmapSize.z;
+                }
+
+                // Step 3: 可变大小 PCF
+                // filterRadiusTexels: 滤波半径，单位为阴影贴图纹素
+                float PCSS_PCF(float2 shadowUV, float d_receiver, float filterRadiusTexels)
+                {
+                    float2 texelSize = _MainLightShadowmapSize.xy;
+                    float stepUV = filterRadiusTexels * texelSize.x; // 转换为 UV 单位
+
+                    float shadowSum = 0;
+                    float sampleCount = 0;
+
+                    int halfSamples = (_PCFSamples - 1) / 2;
+                    for (int x = -halfSamples; x <= halfSamples; x++)
+                    {
+                        for (int y = -halfSamples; y <= halfSamples; y++)
+                        {
+                            float2 offset = float2(x, y) * stepUV;
+                            float s = SAMPLE_TEXTURE2D_SHADOW(
+                                _MainLightShadowmapTexture, sampler_LinearClampCompare,
+                                float3(shadowUV + offset, d_receiver));
+                            shadowSum += s;
+                            sampleCount += 1.0;
+                        }
+                    }
+
+                    return shadowSum / sampleCount;
+                }
+
+                // PCSS 主函数
+                float ComputePCSS(float4 shadowCoord)
+                {
+                    float2 uv = shadowCoord.xy;
+
+                    // 超出阴影贴图范围的区域 = 无阴影（完全照亮）
+                    if (any(uv < 0.0) || any(uv > 1.0))
+                        return 1.0;
+
+                    float d_recv = shadowCoord.z;
+
+                    float d_blocker = FindBlockerDepth(uv, d_recv);
+                    if (d_blocker >= 1.0 - 0.001)
+                        return 1.0;
+
+                    float w = EstimatePenumbraWidth(d_recv, d_blocker);
+                    return PCSS_PCF(uv, d_recv, w);
+                }
+
+                // ============================================================
+                // 光照计算
+                // ============================================================
+                half3 CalculateLight(Light light, Varings input, half3 col, half shadowAttenuation)
+                {
                     half3 l = light.direction;
-                    //法线
                     half3 n = normalize(input.normalWS);
-                    
-                    half3 Ld = _Kd * col * light.distanceAttenuation * max(0, dot(n, l));
 
-                    //观察方向
+                    half NdotL = max(0, dot(n, l));
+                    half3 Ld = _Kd * col * light.distanceAttenuation * NdotL * shadowAttenuation;
+
                     half3 v = normalize(GetCameraPositionWS() - input.positionWS);
-
-                    //半程向量
                     half3 h = normalize(v + l);
-                
-                    half3 Ls = _Ks * col * light.distanceAttenuation * pow(max(0, dot(n, h)), _KsPow);
+                    half3 Ls = _Ks * col * light.distanceAttenuation * pow(max(0, dot(n, h)), _KsPow) * shadowAttenuation;
 
                     return Ld + Ls;
                 }
 
-                //返回rgba
                 half4 MapleFragmentShader(Varings input) : SV_TARGET
                 {
-                    Light light = GetMainLight();
+                    half3 col = tex2D(_BaseMap, input.uv0).xyz;
 
-                    half3 col = tex2D(_BaseMap, input.uv0).xyz; //采样纹理贴图
+                    // ---------- 主光源 ----------
+                    float4 shadowCoord = TransformWorldToShadowCoord(input.positionWS);
 
-                    half3 LsPlusLd = CalculateLight(light, input, col);
+                    half shadowAttenuation;
+                    #if _PCSS_ON
+                        // ====== PCSS 模式 ======
+                        float pcssShadow = ComputePCSS(shadowCoord);
+                        float shadowStrength = _MainLightShadowParams.x;
+                        shadowAttenuation = lerp(1.0 - shadowStrength, 1.0, pcssShadow);
 
-                    //环境光
+                        // 调试: 直接看阴影贴图原始深度
+                        // return float4(SampleShadowMapRawDepth(shadowCoord.xy).xxx, 1.0);
+                    #else
+                        // ====== 标准 URP 阴影 ======
+                        shadowAttenuation = MainLightRealtimeShadow(shadowCoord);
+                    #endif
+
+                    half3 finalCol = CalculateLight(GetMainLight(), input, col, shadowAttenuation);
+
+                    // 环境光
                     half3 La = UNITY_LIGHTMODEL_AMBIENT.rgb * col * _Ka;
+                    finalCol += La;
 
-                    half3 finalCol = LsPlusLd + La;
-
-                    //计算点光源
+                    // ---------- 附加光源 ----------
                     uint additionalLightsCount = GetAdditionalLightsCount();
                     for (uint lightIndex = 0u; lightIndex < additionalLightsCount; lightIndex++)
                     {
                         Light addLight = GetAdditionalLight(lightIndex, input.positionWS);
-                        
-                        //计算这个光源的贡献
-                        half3 addLightColor = CalculateLight(addLight, input, col);
-                        
-                        //将附加光源的贡献累加
-                        finalCol += addLightColor * addLight.shadowAttenuation;
+                        half3 addLightColor = CalculateLight(addLight, input, col, addLight.shadowAttenuation);
+                        finalCol += addLightColor;
                     }
 
-
-                    //阴影只影响漫反射和镜面反射，不影响环境光
                     return half4(finalCol, 1.0);
                 }
 
+            ENDHLSL
+        }
+
+        // ============================================================
+        // ShadowCaster Pass — 让物体能被渲染到阴影贴图中
+        // 没有这个 Pass，物体无法投射阴影！
+        // ============================================================
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            Cull Off
+
+            HLSLPROGRAM
+            #pragma vertex ShadowPassVertex
+            #pragma fragment ShadowPassFragment
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+            };
+
+            float3 _LightDirection;
+            float3 _LightPosition;
+
+            Varyings ShadowPassVertex(Attributes input)
+            {
+                Varyings output;
+                float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(input.normalOS);
+                float4 positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, _LightDirection));
+                output.positionCS = positionCS;
+                return output;
+            }
+
+            half4 ShadowPassFragment(Varyings input) : SV_TARGET
+            {
+                return 0;
+            }
             ENDHLSL
         }
     }
