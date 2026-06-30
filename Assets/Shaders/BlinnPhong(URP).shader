@@ -27,7 +27,7 @@ Shader "Unlit/BlinnPhong(URP)"
         }
 
         HLSLINCLUDE
-            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
 
             #pragma multi_compile_fragment _LIGHT_LAYERS
             #pragma multi_compile_fragment _LIGHT_COOKIES
@@ -111,11 +111,22 @@ Shader "Unlit/BlinnPhong(URP)"
                     return SAMPLE_TEXTURE2D_LOD(_MainLightShadowmapTexture, sampler_PointClamp, uv, 0).r;
                 }
 
+                // 生成一个随屏幕坐标变化的伪随机角度（确定性，无闪烁）
+                float GetRotationAngle(float2 uv)
+                {
+                    return dot(uv, float2(12.9898, 78.233)) * 43758.5453 % 1.0;
+                }
+
                 // Step 1: Blocker Search
                 float FindBlockerDepth(float2 shadowUV, float d_receiver)
                 {
                     float2 texelSize = _MainLightShadowmapSize.xy;
                     float searchRadius = _BlockerSearchRange * texelSize.x;
+
+                    // 生成旋转角度（基于 UV，避免跨像素闪烁）
+                    float angle = GetRotationAngle(shadowUV * 100.0);
+                    float cosA = cos(angle);
+                    float sinA = sin(angle);
 
                     float avgBlockerDepth = 0;
                     float blockerCount = 0;
@@ -125,8 +136,14 @@ Shader "Unlit/BlinnPhong(URP)"
                     {
                         for (int y = -halfSamples; y <= halfSamples; y++)
                         {
-                            float2 offset = float2(x, y) * searchRadius;
-                            float sampleDepth = SampleShadowMapRawDepth(shadowUV + offset);
+                            // 基础偏移量（网格坐标）
+                            float2 baseOffset = float2(x, y) * searchRadius;
+                            // 旋转偏移
+                            float2 rotatedOffset = float2(
+                                baseOffset.x * cosA - baseOffset.y * sinA,
+                                baseOffset.x * sinA + baseOffset.y * cosA
+                            );
+                            float sampleDepth = SampleShadowMapRawDepth(shadowUV + rotatedOffset);
 
                             if (sampleDepth < d_receiver - 0.001)
                             {
@@ -158,6 +175,11 @@ Shader "Unlit/BlinnPhong(URP)"
                     float2 texelSize = _MainLightShadowmapSize.xy;
                     float stepUV = filterRadiusTexels * texelSize.x; // 转换为 UV 单位
 
+                    // 生成旋转角度（不同于 Blocker 的角度，+1.0 偏移避免完全一致）
+                    float angle = GetRotationAngle(shadowUV * 100.0 + 1.0);
+                    float cosA = cos(angle);
+                    float sinA = sin(angle);
+
                     float shadowSum = 0;
                     float sampleCount = 0;
 
@@ -166,10 +188,14 @@ Shader "Unlit/BlinnPhong(URP)"
                     {
                         for (int y = -halfSamples; y <= halfSamples; y++)
                         {
-                            float2 offset = float2(x, y) * stepUV;
+                            float2 baseOffset = float2(x, y) * stepUV;
+                            float2 rotatedOffset = float2(
+                                baseOffset.x * cosA - baseOffset.y * sinA,
+                                baseOffset.x * sinA + baseOffset.y * cosA
+                            );
                             float s = SAMPLE_TEXTURE2D_SHADOW(
                                 _MainLightShadowmapTexture, sampler_LinearClampCompare,
-                                float3(shadowUV + offset, d_receiver));
+                                float3(shadowUV + rotatedOffset, d_receiver));
                             shadowSum += s;
                             sampleCount += 1.0;
                         }
@@ -177,6 +203,8 @@ Shader "Unlit/BlinnPhong(URP)"
 
                     return shadowSum / sampleCount;
                 }
+
+                
 
                 // PCSS 主函数
                 float ComputePCSS(float4 shadowCoord)
@@ -187,7 +215,8 @@ Shader "Unlit/BlinnPhong(URP)"
                     if (any(uv < 0.0) || any(uv > 1.0))
                         return 1.0;
 
-                    float d_recv = shadowCoord.z;
+                    // 从阴影贴图采样深度作为接收深度（加偏置避免自遮挡）
+                    float d_recv = SampleShadowMapRawDepth(uv) + 0.001;
 
                     float d_blocker = FindBlockerDepth(uv, d_recv);
                     if (d_blocker >= 1.0 - 0.001)
